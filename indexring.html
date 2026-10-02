@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TomoTimer - Auto Pomodoro</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Prompt', sans-serif; overflow: hidden; }
+        @keyframes bounce-move {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(80vw, 30vh) rotate(45deg); }
+            50% { transform: translate(40vw, 70vh) rotate(90deg); }
+            75% { transform: translate(-30vw, 40vh) rotate(180deg); }
+            100% { transform: translate(0, 0) rotate(360deg); }
+        }
+        @keyframes exercise-bounce {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-20px) scale(1.1); }
+        }
+        .animate-tomato {
+            animation: bounce-move 8s infinite alternate ease-in-out;
+        }
+        .exercise-item {
+            animation: exercise-bounce 1s ease-in-out infinite;
+            font-size: 4rem;
+        }
+        .exercise-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        .notification-badge {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #22c55e;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 50px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            animation: slideDown 0.3s ease-out;
+            z-index: 1000;
+        }
+        @keyframes slideDown {
+            from { transform: translateX(-50%) translateY(-30px); opacity: 0; }
+            to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body id="body-bg" class="bg-amber-50 text-slate-800 h-screen w-screen flex items-center justify-center px-4 transition-colors duration-500 relative overflow-auto">
+
+    <!-- Background Walking Tomato (Active only during Break) -->
+    <div id="walking-tomato" class="absolute text-5xl pointer-events-none hidden z-0 animate-tomato">
+        🍅
+    </div>
+
+    <div class="max-w-sm w-full space-y-5 z-10">
+        
+        <!-- Header -->
+        <div class="text-center space-y-1">
+            <h1 class="text-3xl font-bold text-red-500">🍅 TomoTimer</h1>
+            <p id="app-subtitle" class="text-sm text-slate-500">ระบบจับเวลาอัตโนมัติ (25 / 5 นาที)</p>
+        </div>
+
+        <!-- Tomato Timer Card -->
+        <div class="bg-white/90 backdrop-blur-md p-6 rounded-3xl shadow-lg border-2 border-red-100 text-center space-y-4 relative">
+            
+            <!-- Tomato Leaf Badge -->
+            <div class="flex justify-center">
+                <span id="mode-badge" class="bg-red-500 text-white text-xs px-3 py-1 rounded-full font-semibold shadow-sm transition-colors duration-300">
+                    🎯 ช่วงทำงาน (Focus)
+                </span>
+            </div>
+
+            <div>
+                <div id="timer-display" class="text-6xl font-bold text-slate-800 tracking-wider my-3">25:00</div>
+                <div id="status-text" class="text-xs text-slate-400 font-medium">โฟกัสกับงานตรงหน้า ห้ามวอกแวก!</div>
+            </div>
+
+            <!-- Exercise Guide (Show during break) -->
+            <div id="exercise-guide" class="hidden">
+                <p class="text-sm font-semibold text-green-600 mb-3">🏃 ออกกำลังกายนิดหน่อย:</p>
+                <div class="exercise-grid">
+                    <div class="exercise-item">🤸</div>
+                    <div class="exercise-item">🧘</div>
+                    <div class="exercise-item">🚴</div>
+                    <div class="exercise-item">🏃</div>
+                    <div class="exercise-item">🙆</div>
+                    <div class="exercise-item">💪</div>
+                </div>
+            </div>
+
+            <div class="flex justify-center gap-2 pt-2">
+                <button onclick="startTimer()" class="bg-red-500 text-white px-5 py-2.5 rounded-2xl text-sm font-semibold shadow-md hover:bg-red-600 transition active:scale-95">เริ่มจับเวลา</button>
+                <button onclick="pauseTimer()" class="bg-amber-400 text-white px-4 py-2.5 rounded-2xl text-sm font-semibold shadow-md hover:bg-amber-500 transition active:scale-95">พักชั่วคราว</button>
+                <button onclick="resetTimer()" class="bg-slate-100 text-slate-600 px-4 py-2.5 rounded-2xl text-sm font-semibold hover:bg-slate-200 transition active:scale-95">รีเซ็ต</button>
+            </div>
+            
+            <!-- Status Info -->
+            <div class="text-xs text-slate-500 pt-2 border-t border-slate-200">
+                <p id="background-status">🟢 ทำงานในพื้นหลัง</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ===== ลงทะเบียน Service Worker =====
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('data:application/javascript,' + 
+                encodeURIComponent(`
+                    self.addEventListener('message', (event) => {
+                        if (event.data.type === 'TIMER_COMPLETE') {
+                            self.registration.showNotification('🍅 TomoTimer', {
+                                body: event.data.message,
+                                icon: '🍅',
+                                badge: '🍅',
+                                tag: 'tomotimer',
+                                requireInteraction: true
+                            });
+                        }
+                    });
+                `)
+            ).catch(err => console.log('SW Error:', err));
+        }
+
+        // ===== ตัวแปรจับเวลา =====
+        let timer;
+        let timeLeft = 25 * 60;
+        let isRunning = false;
+        let currentMode = 'focus';
+        let wakeLock = null;
+
+        // ===== โหลดสถานะจาก localStorage =====
+        function loadState() {
+            const saved = localStorage.getItem('tomotimer_state');
+            if (saved) {
+                const state = JSON.parse(saved);
+                timeLeft = state.timeLeft;
+                currentMode = state.currentMode;
+                updateDisplay();
+                triggerBreakUI(currentMode === 'break');
+            }
+        }
+
+        // ===== บันทึกสถานะ =====
+        function saveState() {
+            localStorage.setItem('tomotimer_state', JSON.stringify({
+                timeLeft: timeLeft,
+                currentMode: currentMode,
+                timestamp: Date.now()
+            }));
+        }
+
+        // ===== ขอสิทธิ์การแจ้งเตือน =====
+        function requestNotificationPermission() {
+            if ('Notification' in window && Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+        }
+
+        // ===== ส่งการแจ้งเตือน =====
+        function sendNotification(title, message) {
+            if ('Notification' in window && Notification.permission === 'granted') {
+                navigator.serviceWorker.controller?.postMessage({
+                    type: 'TIMER_COMPLETE',
+                    message: message
+                });
+
+                // แจ้งเตือนใน app ถ้าหน้าจออยู่
+                const badge = document.createElement('div');
+                badge.className = 'notification-badge';
+                badge.textContent = message;
+                document.body.appendChild(badge);
+                setTimeout(() => badge.remove(), 3000);
+            }
+        }
+
+        // ===== เสียงเตือน =====
+        function playAlarmSound() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                for (let i = 0; i < 5; i++) {
+                    setTimeout(() => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        
+                        osc.type = 'sine';
+                        osc.frequency.value = 800 + (i * 100);
+                        
+                        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                        
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start();
+                        osc.stop(audioCtx.currentTime + 0.3);
+                    }, i * 400);
+                }
+                
+                // สั่นโทรศัพท์
+                if (navigator.vibrate) {
+                    navigator.vibrate([200, 100, 200, 100, 200]);
+                }
+                
+            } catch (e) {
+                console.log("Audio not supported");
+            }
+        }
+
+        // ===== เปิดจอไม่ให้ปิด (Wake Lock) =====
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake Lock acquired');
+                } catch (err) {
+                    console.log('Wake Lock error:', err);
+                }
+            }
+        }
+
+        // ===== ปล่อย Wake Lock =====
+        function releaseWakeLock() {
+            if (wakeLock) {
+                wakeLock.release();
+                wakeLock = null;
+            }
+        }
+
+        // ===== เริ่มจับเวลา =====
+        function startTimer() {
+            if (isRunning) return;
+            isRunning = true;
+            requestNotificationPermission();
+            requestWakeLock();
+            saveState();
+            
+            timer = setInterval(() => {
+                if (timeLeft > 0) {
+                    timeLeft--;
+                    saveState();
+                    updateDisplay();
+                } else {
+                    clearInterval(timer);
+                    isRunning = false;
+                    playAlarmSound();
+
+                    if (currentMode === 'focus') {
+                        currentMode = 'break';
+                        timeLeft = 5 * 60;
+                        triggerBreakUI(true);
+                        saveState();
+                        
+                        const breakMsg = "หมดเวลาทำงานแล้ว! ⏰ พักผ่อนยืดเส้น 5 นาทีอัตโนมัติครับ 🍅";
+                        sendNotification("เวลาหยุดพัก", breakMsg);
+                        alert(breakMsg);
+                        startTimer();
+                    } else {
+                        currentMode = 'focus';
+                        timeLeft = 25 * 60;
+                        triggerBreakUI(false);
+                        saveState();
+                        
+                        const focusMsg = "หมดเวลาพักแล้ว! ⏰ ลุยทำงานต่อกันเลยครับ! 💪";
+                        sendNotification("เวลาทำงาน", focusMsg);
+                        alert(focusMsg);
+                        startTimer();
+                    }
+                }
+            }, 1000);
+        }
+
+        // ===== หยุดจับเวลา =====
+        function pauseTimer() {
+            clearInterval(timer);
+            isRunning = false;
+            releaseWakeLock();
+            saveState();
+        }
+
+        // ===== รีเซ็ตจับเวลา =====
+        function resetTimer() {
+            clearInterval(timer);
+            isRunning = false;
+            releaseWakeLock();
+            currentMode = 'focus';
+            timeLeft = 25 * 60;
+            triggerBreakUI(false);
+            localStorage.removeItem('tomotimer_state');
+            updateDisplay();
+        }
+
+        // ===== อัปเดตการแสดงผล =====
+        function updateDisplay() {
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            document.getElementById('timer-display').innerText = 
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            
+            // อัปเดต title ของหน้า (แสดงในแท็บ)
+            document.title = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} - TomoTimer`;
+        }
+
+        // ===== เปลี่ยน UI ช่วงพัก/ทำงาน =====
+        function triggerBreakUI(isBreak) {
+            const badge = document.getElementById('mode-badge');
+            const statusText = document.getElementById('status-text');
+            const bodyBg = document.getElementById('body-bg');
+            const tomatoWalker = document.getElementById('walking-tomato');
+            const exerciseGuide = document.getElementById('exercise-guide');
+
+            if (isBreak) {
+                badge.innerText = "🌿 ช่วงพักเบรก (Break)";
+                badge.className = "bg-green-500 text-white text-xs px-3 py-1 rounded-full font-semibold shadow-sm transition-colors duration-300";
+                statusText.innerText = "ลุกขึ้นยืดเส้นยืดสาย ผ่อนคลายสายตานะครับ~";
+                bodyBg.className = "bg-emerald-50 text-slate-800 h-screen w-screen flex items-center justify-center px-4 transition-colors duration-500 relative overflow-auto";
+                tomatoWalker.classList.remove('hidden');
+                exerciseGuide.classList.remove('hidden');
+            } else {
+                badge.innerText = "🎯 ช่วงทำงาน (Focus)";
+                badge.className = "bg-red-500 text-white text-xs px-3 py-1 rounded-full font-semibold shadow-sm transition-colors duration-300";
+                statusText.innerText = "โฟกัสกับงานตรงหน้า ห้ามวอกแวก!";
+                bodyBg.className = "bg-amber-50 text-slate-800 h-screen w-screen flex items-center justify-center px-4 transition-colors duration-500 relative overflow-auto";
+                tomatoWalker.classList.add('hidden');
+                exerciseGuide.classList.add('hidden');
+            }
+            updateDisplay();
+        }
+
+        // ===== ตรวจสอบการตัดการเชื่อมต่อ =====
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                console.log('App hidden - timer continues in background');
+            } else {
+                console.log('App visible - updating display');
+                updateDisplay();
+            }
+        });
+
+        // ===== โหลดสถานะขณะเปิดหน้าใหม่ =====
+        window.addEventListener('load', () => {
+            loadState();
+            requestNotificationPermission();
+        });
+
+        // ===== เก็บสถานะเมื่อปิดหน้า =====
+        window.addEventListener('beforeunload', () => {
+            saveState();
+        });
+
+        // ===== ตรวจสอบสถานะหน้าจอ =====
+        if ('screen' in window && 'orientation' in window.screen) {
+            window.screen.orientation.addEventListener('change', () => {
+                console.log('Screen orientation changed');
+            });
+        }
+    </script>
+</body>
+</html>
